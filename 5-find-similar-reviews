@@ -1,0 +1,268 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+import os, sys, pprint, math, signal, time, traceback, errno
+from enum import Enum
+
+N_SYNONYMS   = 10
+
+def initParser():
+  parser = argparse.ArgumentParser()
+
+  parser.add_argument("-n", "--ngramfile",    type=str, help="File containing ngram -> review map",      required=True)
+  parser.add_argument("-s", "--similarities", type=str, help="File containing word -> similar word map", required=True)
+  parser.add_argument("-w", "--wordfreqs",    type=str, help="File containing word frequency metadata",  required=True)
+  parser.add_argument("-c", "--corpus",       type=str, help="File containing actual review metadata",   required=True)
+
+  return parser.parse_args()
+
+class FBScoringSchemes(Enum):
+  DEFAULT = 1
+  SIMPLE  = 2
+  END     = 3
+
+def freqWeight(num): #TODO: look into ways to weight freqeuncy based on overall occurrence + document occurrence
+  return (1.0/int(num))**(0.5)
+  # return (1.0/math.log(int(num),2))**2
+
+class FeedbackAnalyzer():
+
+  def __init__(self,ngramfile,similarities,wordfreqs,corpus):
+    for f in [ngramfile,similarities,wordfreqs,corpus]:
+      if not os.path.exists(f): erorp("Could not find {}".format(f)); sys.exit(-1)
+
+    # with open(wordfreqs,'r') as fin: #TODO: shrink this list to exclude very rare words
+    #   self.wordfreqs = { x : freqWeight(y) for x,y in [tuple(line.split()) for line in fin.readlines()] }
+    print("> Loading word frequencies")
+    self.wordfreqs = SortedList(compressedJsonRead(wordfreqs))
+    twords         = self.getWordFrequency("_TOTAL_")
+    self.engwords  = twords[1]
+    self.corpwords = twords[2]
+
+    print("> Loading ngrams")
+    self.all_ngrams    = SortedList(compressedJsonRead(ngramfile))
+    print("> Loading similarities")
+    self.all_sims      = compressedJsonRead(similarities)
+    print("> Loading corpus")
+    self.corpus        = JsonStreamLoader().parseFromGzip(corpus)
+
+    print("> Initializing pipeline")
+    self.pipeline      = NLP_Pipeline()
+    self.pp            = pprint.PrettyPrinter(indent=2,width=119)
+
+    self.scoringschemes = {
+      FBScoringSchemes.DEFAULT : self.defaultScoringScheme,
+      FBScoringSchemes.SIMPLE  : self.simpleScoringScheme,
+      FBScoringSchemes.END     : self.defaultScoringScheme,
+    }
+
+    self._checkSimilar = True #Whether we check similar ngrams
+
+  def checkSimilar(self,val):
+    self._checkSimilar = val
+
+  def print(self,data):
+    self.pp.pprint(data)
+
+  def preprocessFeedback(self,feedback):
+    return self.pipeline.processText(feedback)
+
+  def findFeedbackMatches(self,processedtext):
+    # self.pp.pprint(processedtext)
+    matchdata = []
+    for bigram in processedtext["bigrams"]:
+      nspan    = [bigram[0][2],bigram[-1][2]+len(bigram[-1][0])] #Use NON-lemmatized word for span matching
+      if self._checkSimilar:
+        simgrams = findSimilarPhrases(bigram,self.all_sims,N_SYNONYMS)
+      else:
+        simgrams = [[' '.join([w[1] for w in bigram]),1]] #Use lemmatized word
+      for simgram in simgrams:
+        if "-PRON-" in simgram[0]: #Exclude pronoun phrases
+          continue
+        ipoint = findNgramInSortedList(simgram[0],self.all_ngrams)
+        if ipoint is None:
+          continue
+        invfreq = 1.0/len(self.all_ngrams[ipoint][1])
+        for rdata in self.all_ngrams[ipoint][1]:
+          matchdata.append({
+            "match" : simgram[0], #The matching ngram
+            "fbid"  : rdata[0],   #The id of the review containing the ngram
+            "ospan" : rdata[1:],  #The position of the ngram in the review
+            "ispan" : nspan,      #The position of the ngram in the input string
+            "idf"   : invfreq,    #Equal to 1 / <number of reviews ngram occurred in>
+            "sim"   : simgram[1], #Weight based on similarity to input ngram
+            })
+    return matchdata
+
+  def simpleScoringScheme(self,matchdata):
+    scores = {}
+    for m in matchdata:
+      s                 = (-m["sim"]/math.log(m["idf"],2))
+      scores[m["fbid"]] = (s) if (m["fbid"] not in scores) else (scores[m["fbid"]] + s)
+    return scores
+
+  def defaultScoringScheme(self,matchdata):
+    return self.simpleScoringScheme(matchdata)
+
+  def determineBestMatches(self,matchdata,scoringmethod=FBScoringSchemes.DEFAULT,nmatches=50):
+    scorereviews = self.scoringschemes[scoringmethod]
+    scores = scorereviews(matchdata)
+    return [
+      (s,scores[s],pickle.loads(
+        zlib.decompress(self.corpus["reviews"][s]))["text"]
+        ) for s in sorted(scores, key=scores.get, reverse = True)[:nmatches]
+      ]
+    # return matchdata
+
+  def getWordFrequency(self,word,corpus=True):
+    ipoint = self.wordfreqs.bisect_left([word,0,0])
+    if (ipoint == len(self.wordfreqs) or (self.wordfreqs[ipoint][0] != word)):
+      return None
+    #0 == word, 1 == count in English, 2 == count in corpus, 3 = logratio of frequency between English / corpus
+    return self.wordfreqs[ipoint]
+
+  def suggestAdditionalPhrases(self,processedinput,bestmatches):
+    alreadyused = set([u[1] for u in processedinput["unigrams"]])
+    suggestions = {}
+    for review in bestmatches:
+      revid     = review[0]
+      unpackedreview  = pickle.loads(zlib.decompress(self.corpus["reviews"][revid]))
+      for token in unpackedreview["_tokens"]:
+        word = token[1]
+        if word in alreadyused:
+          continue
+        freq = self.getWordFrequency(word)
+        if freq is None:
+          continue
+        invfreq = (1.0/(freq[1]+1))**(0.5)
+        invfreq *= -freq[3] #Multiply by the negative logratio frequency to bias towards domain-specific words
+        if word in suggestions:
+          suggestions[word] += invfreq
+        else:
+          suggestions[word] = invfreq
+    return [(s,suggestions[s]) for s in sorted(suggestions, key=suggestions.get, reverse = True)]
+
+  def highlightResults(self,processedinput,matchdata,bestmatches):
+    highlights = { b[0]:[] for b in bestmatches }
+    for m in matchdata:
+      if m["fbid"] in highlights:
+        highlights[m["fbid"]].append({k:m[k] for k in ["ispan","ospan"]})
+    return highlights
+
+  def findMostRelevantFeedback(self,yourfeedback):
+    #Process the input using the NLP pipeline
+    processedinput =  self.preprocessFeedback(yourfeedback)
+    # fb.print(processedinput)
+
+    #Find all candidate matching reviews (feedback in the corpus)
+    matchdata      = self.findFeedbackMatches(processedinput)
+    # fb.print(matchdata)
+
+    #Rank the candidate reviews according to some scoring scheme
+    bestmatches    = self.determineBestMatches(matchdata,scoringmethod=FBScoringSchemes.DEFAULT,nmatches=50)
+    # fb.print(bestmatches[:5])
+
+    #Suggest additional phrases that occur in reviews but not in the input
+    suggestedphrases = self.suggestAdditionalPhrases(processedinput,bestmatches)
+    # fb.print(suggestedphrases[:5])
+
+    #Finally, return the top reviews and highlight them
+    bestmatches      = bestmatches[:5]  #Look at the top 5
+    suggestedphrases = suggestedphrases[:5] #Same for phrases
+    highlightinfo    = self.highlightResults(processedinput,matchdata,bestmatches)
+    # fb.print(highlightinfo)
+
+    #Compile the requisite information together into a nice data structure
+    retjson = {
+      "_input"      : yourfeedback,
+      "matches"     : bestmatches,
+      "suggestions" : suggestedphrases,
+      "highlights"  : highlightinfo,
+    }
+    return retjson
+
+def setupSocket():
+  ss = MySocket()
+  ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  sops = (SOCK_IP,SOCK_PORT)
+  ss.bind(sops)
+  infop("Listening on {0}".format(sops))
+  ss.listen(1) #Number of clients allowed to connect a once
+  return ss
+
+# Launching a socket (server)
+#TODO: finish this up later
+def startServer():
+  args = initParser()
+  fb   = FeedbackAnalyzer(args.ngramfile,args.similarities,args.wordfreqs,args.corpus)
+  ss   = setupSocket()
+  while True:
+    try:
+      (clientsocket, address) = ss.accept() # accept connections from outside
+      myclient                = MySocket(clientsocket)
+      cname                   = str(clientsocket.getpeername())
+      clientsocket.settimeout(3)
+
+      #Receive a string
+      r = myclient.receiveString()
+      recvp(r)
+
+      # j = json.loads(r)
+      # recvp(j)
+      # yourfeedback = j["feedback"]
+
+      # result = similarityByNgramMatch(r,fbanalyzer)
+      result = fb.findMostRelevantFeedback(r)
+
+      #Send it back twice
+      ret = json.dumps(result)
+      sendp(ret)
+      myclient.sendString(ret)
+    except socket.timeout:
+      warnp("Connection to client "+cname+" timed out")
+      print("")
+      continue
+    except socket.error as e:
+      if e.errno == errno.EPIPE:
+        warnp("Connection to client "+cname+" terminated by client")
+        print("")
+        continue
+    except Exception as e:
+      erorp("Unhandled error: {0}".format(e))
+      erorp("{0}".format(traceback.format_exc()))
+      warnp("Connection to client "+cname+" closed due to invalid protocol")
+      clientsocket.close()
+
+def main():
+  args = initParser()
+  fb   = FeedbackAnalyzer(args.ngramfile,args.similarities,args.wordfreqs,args.corpus)
+  while True:
+    yourfeedback = input("Enter some feedback (q to quit): ")
+    if yourfeedback == "q":
+      break
+    if yourfeedback == "":
+      yourfeedback = "update your app. update your youtube video too."
+    print("""Searching for "{}"...""".format(yourfeedback))
+    retjson = fb.findMostRelevantFeedback(yourfeedback)
+    fb.print(retjson)
+
+def sigint_handler(signum, frame):
+  global _interrupted, rnc
+  _interrupted = True
+
+def streamTest():
+  global _interrupted
+  _interrupted = False
+
+  signal.signal(signal.SIGINT, sigint_handler)
+  infile = "/home/pretzel/workspace/google-scraper/reviews-preprocessed.json.gz"
+  inhandle = gzip.open(infile, 'rt', encoding='utf-8')
+  stream   = JsonStreamLoader()
+  loaded = stream.parseFromIOHandle(inhandle)
+  print(loaded)
+  inhandle.close()
+
+if __name__ == "__main__":
+  # streamTest()
+  startServer()
+  # main()

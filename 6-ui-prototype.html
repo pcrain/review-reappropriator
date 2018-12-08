@@ -1,0 +1,347 @@
+<!-- update your app's youtube video. -->
+
+<!--
+  TODO:
+    - Second occurrence of phrases is often not highlighted; should deduplicate phrases when highlighting
+ -->
+
+<html>
+    <head>
+      <script src="jquery-3.1.1.min.js"></script>
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+      <style type="text/css">
+        label#reslabel {
+          /*color: darkblue;*/
+          font-weight: bold;
+        }
+        tr#resrow0 td {
+          text-align: center;
+          color: darkblue;
+          margin: 20px 10px;
+        }
+        td.centered {
+          text-align: center;
+        }
+       .fa {
+          font-size: 24px;
+          cursor: pointer;
+          user-select: none;
+          color: darkblue;
+        }
+
+        .fa:hover {
+          /*color: darkblue;*/
+        }
+
+        .fa.fa-thumbs-up.clicked { color: lime; }
+        .fa.fa-thumbs-down.clicked { color: red; }
+
+        .fa.fa-thumbs-up.grayed, .fa.fa-thumbs-down.grayed {
+          opacity: 0.1;
+        }
+
+        span.nohl {
+          color: rgb(96,96,96);
+        }
+        span.hl {
+          font-weight: bolder;
+          /*font-weight: bold;*/
+          /*color: lime;*/
+        }
+        /*span.hl:hover, */
+        span.hl.pseudohover {
+          /*font-weight: bold;*/
+          cursor: help;
+        }
+      </style>
+    </head>
+    <body>
+      <form id="feedback-search-form">
+        Start Entering Feedback:
+        <table>
+          <tr><td rowspan="6">
+            <textarea rows="8" cols="80" autofocus id="searchterms" type="text" name="searchterms"></textarea><br>
+          </td><td><b>Topic Suggestions</b>:</td></tr>
+          <tr><td class="centered" id="suggestion1">___</td></tr>
+          <tr><td class="centered" id="suggestion2">___</td></tr>
+          <tr><td class="centered" id="suggestion3">___</td></tr>
+          <tr><td class="centered" id="suggestion4">___</td></tr>
+          <tr><td class="centered" id="suggestion5">___</td></tr>
+        </table>
+        <input id="searchterms-button" type="button" value="search">
+        <!-- <input id="images-button" type="button" value="images"> -->
+      </form>
+      <!-- <label id="reslabel">Query:</label> -->
+      <div id="resultArea">
+      </div>
+    </body>
+</html>
+<script>
+  var colorArray = [
+    [220,14,120,0.5],
+    [14,220,120,0.5],
+    [14,120,220,0.5],
+    [220,120,14,0.5],
+    [120,220,14,0.5],
+    [120,14,220,0.5],
+  ];
+
+  function upvote(x) {
+    $( "#uvote"+x ).addClass("clicked");
+    $( "#dvote"+x ).removeClass("clicked");
+    $( "#uvote"+x ).removeClass("grayed");
+    $( "#dvote"+x ).addClass("grayed");
+  }
+
+  function downvote(x) {
+    $( "#dvote"+x ).addClass("clicked");
+    $( "#uvote"+x ).removeClass("clicked");
+    $( "#dvote"+x ).removeClass("grayed");
+    $( "#uvote"+x ).addClass("grayed");
+  }
+
+  function averageColor(indices) {
+    var color = [255,255,255,0.5];
+    for (var i = 0; i < indices.length; ++i) {
+      var c = colorArray[indices[i]%colorArray.length];
+      color[0] = Math.floor((0.5*color[0])+(0.5*c[0]));
+      color[1] = Math.floor((0.5*color[1])+(0.5*c[1]));
+      color[2] = Math.floor((0.5*color[2])+(0.5*c[2]));
+    }
+    rstring = "rgba({0})".formatUnicorn(color.join(','));
+    return rstring
+  }
+
+  function genColorSheet() {
+    styling = "";
+    for(var i = 0; i < 100; ++i) {
+      var cind = i % colorArray.length;
+      bg = "background: {0};".formatUnicorn(averageColor([cind]));
+      classes = "span.hl.hl"+i+".pseudohover";
+      styling += classes+" { "+bg+"}\n";
+    }
+    var style = document.createElement('style');
+    style.type = 'text/css';
+    style.innerHTML = styling;
+    // alert(styling);
+    document.getElementsByTagName('head')[0].appendChild(style);
+  }
+
+  function getFeedback(searchTerm, callback, errorCallback) {
+    // var w = "http://pcrain2.web.engr.illinois.edu/fbsearch/";
+    // var w = "http://127.0.0.1:8081/";
+    var w = "http://127.0.0.1:8888/miniserver.php";
+    var xhttp = new XMLHttpRequest();
+
+    xhttp.onload = function() {
+      callback(xhttp.responseText);
+    };
+    xhttp.onerror = function() {
+      alert(xhttp.status);
+    };
+    xhttp.open('POST', w, true);
+    // xhttp.setRequestHeader('Content-Type', 'application/json');
+    // xhttp.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    // xhttp.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    // xhttp.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
+    var senddata = JSON.stringify({"feedback" : searchTerm});
+    xhttp.send(senddata);
+    return true; // prevents the callback from being called too early on return
+  }
+
+  //Funciton for transforming spans into actual highlights
+  function getHighlights(retdata) {
+    var highspans  = {} //Spans that are highlighted for each review + input
+    var rlengths   = {} //Length of reviews
+    var spannames  = {} //Names of individual spans in the input
+
+    for (var m in retdata["matches"]) {
+      rid = retdata["matches"][m][0];
+      highspans[rid] = [];
+      rlengths[rid]  = retdata["matches"][m][2].length;
+    }
+    highspans[-1] = [];
+    rlengths[-1]  = retdata["_input"].length;
+
+    // alert(JSON.stringify(retdata["highlights"]));
+    for (var rid in retdata["highlights"]) {
+      for (var h in retdata["highlights"][rid]) {
+        highlight = retdata["highlights"][rid][h];
+        highname = highlight["ispan"][0]+"-"+highlight["ispan"][1]
+
+        //If we haven't seen this span before, add it as a new color in the input
+        if (!(highname in spannames)) {
+          spannames[highname] = Object.keys(spannames).length;
+          // alert(spannames[highname]);
+          highspans[-1].push({
+            "start" : highlight["ispan"][0],
+            "end"   : highlight["ispan"][1],
+            "id"    : spannames[highname],
+          });
+        }
+        //Add the span to the output
+        highspans[rid].push({
+          "start" : highlight["ospan"][0],
+          "end"   : highlight["ospan"][1],
+          "id"    : spannames[highname],
+        });
+      }
+    }
+
+    //Resolve overlaps
+    highlightinfo = {}
+    for (var rid in highspans) {
+      highlightinfo[rid] = []
+      toggles = []
+      //Figure out when classes should be toggled on and off
+      for (var h in highspans[rid]) {
+        toggles.push([highspans[rid][h]["start"],"on",highspans[rid][h]["id"]]);
+        toggles.push([highspans[rid][h]["end"],  "off",highspans[rid][h]["id"]]);
+      }
+      toggles.sort(function(a,b) { return (a[0] < b[0]) ? -1 : 1; }); //Sort by the first element of each subarray
+      activelist = []
+      //Make sure we start at 0 if the first span doesn't already start there
+      if (toggles[0][0] > 0) {
+        highlightinfo[rid].push([0,toggles[0][0],[]]);
+      }
+      for (var ind = 0; ind < toggles.length; ++ind) {
+        t = toggles[ind];
+        if (t[1] == "on") {
+          activelist.push(t[2]);
+        } else { //t[1] == "off"
+          activelist.splice( activelist.indexOf(t[2]), 1 );
+        }
+        spanstart = t[0];
+        spanend   = (ind == toggles.length-1) ? rlengths[rid] : toggles[ind+1][0];
+        newmark   = [spanstart,spanend,activelist.slice()]
+        if (spanstart == spanend) {  //Update the last element of the list with the new active list
+          highlightinfo[rid][highlightinfo.length-1] = newmark;
+        } else {
+          highlightinfo[rid].push(newmark);
+        }
+      }
+    }
+    return highlightinfo
+  }
+
+  function searchForFeedback() {
+    // document.getElementById('text-result').innerHTML = "";
+    var q = document.getElementById("searchterms").value;
+    // var q = "update your app";
+    getFeedback(q, function(result) {
+      // alert(result);
+      var retdata = JSON.parse(JSON.parse(result));
+      if (retdata["matches"].length == 0) {
+        alert("Nothing found. :(");
+        return
+      }
+      // alert(retdata);
+      // alert(retdata["_input"]);
+      // alert(JSON.stringify(retdata));
+
+      var rstring      = '<table>';
+      var tcell        = '<tr id="resrow{2}"><td>{1}</td><td style="display: block; word-wrap:break-word;">{0}</td></tr>';
+      var updownvote   = '<i id="uvote{0}" onclick="upvote({0})" class="fa fa-thumbs-up"></i><i id="dvote{0}" onclick="downvote({0})" class="fa fa-thumbs-down"></i>';
+
+      var highlights = getHighlights(retdata);
+      // alert(JSON.stringify(highlights))
+
+      for (var i = -1; i < retdata["matches"].length; ++i) {
+        if (i == -1) {
+          rid   = -1;
+          rtext = retdata["_input"];
+        } else {
+          review = retdata["matches"][i];
+          rid    = review[0];
+          rtext  = review[2];
+        }
+        markup = "";
+        for (var h in highlights[rid]) {
+          var hh = highlights[rid][h];
+          sub = rtext.substring(hh[0],hh[1]);
+          if (hh[2].length == 0) {
+            markup += "<span class='nohl'>"+sub+"</span>";
+          } else {
+            markup += "<span class='hl hl{3}' onmouseout='showHighlights([])' onmouseover='showHighlights([{2}])' >{1}</span>".formatUnicorn(
+              averageColor(hh[2]),
+              sub,
+              hh[2].join(","),
+              hh[2].join(" hl")
+              );
+          }
+        }
+        rstring +=  tcell.formatUnicorn(
+          markup,
+          (i == -1) ? "" : updownvote.formatUnicorn(i+1),
+          i+1
+          );
+        rstring +=  '<tr><td colspan="2"><hr/></td></tr>';
+      }
+      rstring += "</table>";
+      document.getElementById('resultArea').innerHTML = rstring;
+      for (var i = 0; i < retdata["suggestions"].length; ++i) {
+        $('td#suggestion'+(i+1)).html(retdata["suggestions"][i][0]);
+      }
+    }, function(errorMessage) {
+      document.getElementById('resultArea').innerHTML = 'Cannot display feedback: ' + errorMessage
+    });
+  }
+
+  function showHighlights(arr) {
+    $( ".hl" ).each(function( index ) {
+      $( this ).removeClass("pseudohover");
+    });
+    if (arr.length == 0) {
+      return;
+    }
+    //V1
+    for (var i = 0; i < arr.length; ++i) {
+      $( ".hl"+arr[i] ).each(function( index ) {
+        $( this ).addClass("pseudohover");
+      });
+    }
+    //V2
+    // $( ".hl.hl"+arr.join(".hl") ).each(function( index ) {
+    //   $( this ).addClass("pseudohover");
+    // });
+  }
+
+  function entersearch(event) {
+    // alert("hi");
+    if(event.keyCode == 13) {
+      event.preventDefault();
+      // return false; //So we don't submit the form
+      searchForFeedback();
+    }
+  }
+
+  String.prototype.formatUnicorn = String.prototype.formatUnicorn ||
+  function () {
+      "use strict";
+      var str = this.toString();
+      if (arguments.length) {
+          var t = typeof arguments[0];
+          var key;
+          var args = ("string" === t || "number" === t) ?
+              Array.prototype.slice.call(arguments)
+              : arguments[0];
+
+          for (key in args) {
+              str = str.replace(new RegExp("\\{" + key + "\\}", "gi"), args[key]);
+          }
+      }
+
+      return str;
+  };
+
+  //Begin code
+
+  document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById("searchterms-button").addEventListener("click", searchForFeedback);
+    var st = document.getElementById("searchterms");
+    // st.value = "update the app with a video now";
+    st.value = "update your app's youtube video.";
+    st.addEventListener("keydown", entersearch);
+    genColorSheet();
+  });
+</script>

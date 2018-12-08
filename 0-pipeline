@@ -1,0 +1,56 @@
+#!/bin/bash
+
+        word_frequencies="./data/enwiki-20150602-words-frequency.txt"
+           base_app_file="./data/apps-static.tsv"
+        base_review_file="./data/reviews-static.tsv"
+      merged_review_file="./data/reviews-merged.tsv"
+    filtered_review_file="./data/reviews-filtered.tsv"
+preprocessed_review_file="./data/reviews-preprocessed.json.gz"
+    kngram_review_file_2="./data/reviews-k3n2grams.json.gz"
+    kngram_review_file_3="./data/reviews-k3n3grams.json.gz"
+      unigram_count_file="./data/unigram-counts.json.gz"
+        unigram_sim_file="./data/unigram-similarities.json.gz"
+
+if [ ! -f $base_app_file ]; then
+  if [ -f ./scraper/apps.tsv ]; then
+    cp ./scraper/apps.tsv $base_app_file
+  else
+    echo "Could not find $base_app_file or ./scraper/apps.tsv"
+    exit 1
+  fi
+fi
+
+if [ ! -f $base_review_file ]; then
+  if [ -f ./scraper/reviews.tsv ]; then
+    cp ./scraper/reviews.tsv $base_review_file
+  else
+    echo "Could not find $base_review_file or ./scraper/reviews.tsv"
+    exit 1
+  fi
+fi
+
+# Merge review data and app-data, stripping away unnecessary information
+# ./1-merge-apps-and-reviews "$base_review_file" "$base_app_file" "$merged_review_file"
+
+# Filter out bad reviews
+# ./2-filter-bad-reviews -f "$word_frequencies" "$merged_review_file" "$filtered_review_file"
+
+# Do NLP preprocessing on the text
+# ./3-nlp-preprocess-reviews "$filtered_review_file" "$preprocessed_review_file"
+
+# Count and index k-n-grams in reviews
+# ./4-1-count-kngrams-in-reviews -n2 -k3 -t3 "$preprocessed_review_file" "$kngram_review_file_2"
+# ./4-1-count-kngrams-in-reviews -n3 -k3 -t3 "$preprocessed_review_file" "$kngram_review_file_3"
+
+# Get frequency distribution of unigrams in reviews
+# ./4-2-get-word-frequency-info -f "$word_frequencies" "$preprocessed_review_file" "$unigram_count_file"
+
+# Map unigrams to most similar words
+# ./4-3-find-similar-unigrams "$unigram_sim_file" -a
+
+# Find similar reviews
+./5-find-similar-reviews  \
+  --ngramfile    "$kngram_review_file_2" \
+  --similarities "$unigram_sim_file" \
+  --wordfreqs    "$unigram_count_file" \
+  --corpus       "$preprocessed_review_file"

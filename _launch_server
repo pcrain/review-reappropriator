@@ -1,0 +1,4 @@
+#!/bin/bash
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
+tmux new-session -ds compass-server "php -S 127.0.0.1:8888 -t $SCRIPT_DIR; read"

@@ -1,0 +1,79 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+
+import json, gzip, csv, re, hashlib, os, signal
+
+DPRINT          = True
+K = 3
+
+_interrupted = False
+
+#Debug printing
+def dprint(*args, **kwargs):
+  if DPRINT: print(*args, **kwargs)
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('infile',              metavar='infile',     type=str, help='input raw review file name')
+  parser.add_argument('outfile',             metavar='outfile',    type=str, help='output filtered review file name')
+  parser.add_argument("-f", "--frequencies", metavar="netid_file", type=str, help="file listing word/frequency pairs", required=True)
+  return parser.parse_args()
+
+#Signal handling
+def sigint_handler(signum, frame):
+  global _interrupted
+  _interrupted = True
+
+def main():
+  args = initParser()
+  #Load word frequencies
+  print("Loading word frequencies")
+  wordfreqs = {}
+  with open(args.frequencies, 'r') as ffile:
+    twords = 0
+    for i,line in enumerate(ffile.readlines()):
+      word,y = tuple(line.split())
+      # if not RE_WORD.match(word): continue
+      freq = int(y)
+      twords += freq
+      wordfreqs[word] = [
+        freq,
+        0,
+        0
+        ]
+  print("Loading reviews")
+  reviews = compressedJsonRead(args.infile)
+  rwords = 0
+  nreviews = len(reviews["reviews"])
+  for i,r in enumerate(reviews["reviews"]):
+    print("\rScanning review {}/{}".format(i,nreviews),end="")
+    for token in r["_tokens"]:
+      rwords += 1
+      word = token[0]
+      if word not in wordfreqs:
+        if not RE_WORD.match(word):
+          continue
+        wordfreqs[word] = [0,1,0]
+      else:
+        wordfreqs[word][1] += 1
+  wordfreqs["_TOTAL_"] = [twords,rwords,0]
+  print("")
+  print("Sorting word frequencies")
+  #Entry format: [word, english frequency, review frequency, log differnce of english and review frequency]
+  wordfreqs = list(SortedList([[w]+wordfreqs[w] for w in sorted(wordfreqs, key=wordfreqs.get, reverse = True)]))
+  print("Computing log frequency ratios")
+  sizediff = math.log(twords,2)-math.log(rwords,2)
+  print(sizediff)
+  for i in range(len(wordfreqs)):
+    if wordfreqs[i][1] >= 3 and wordfreqs[i][2] >= 3:
+      wordfreqs[i][3] = -(sizediff+math.log(wordfreqs[i][2],2)-math.log(wordfreqs[i][1],2))
+      print(wordfreqs[i])
+  # pprint.pprint(wordfreqs,width=118)
+  print("Saving JSON")
+  jsonWrite(wordfreqs,args.outfile[:-3],indent=1)
+  print("Saving Compressed JSON")
+  compressedJsonWrite(wordfreqs,args.outfile)
+
+if __name__ == "__main__":
+  main()

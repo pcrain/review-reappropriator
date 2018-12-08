@@ -1,0 +1,5 @@
+__pycache__/
+_old_code/
+data/*
+scraper/apps.tsv
+scraper/reviews.tsv

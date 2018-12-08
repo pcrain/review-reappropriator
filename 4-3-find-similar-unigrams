@@ -1,0 +1,90 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+
+import os, signal, gzip, json
+import nltk ,spacy
+
+CUTOFF_SIM = 0.3
+MATCHES = 1000
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  # parser.add_argument('infile',  metavar='infile',  type=str, help='input raw review file name')
+  parser.add_argument('outfile', metavar='outfile', type=str, help='output filtered review file name')
+  parser.add_argument("-a", "--automate", action="store_true",
+      help="Run in automatic mode")
+  return parser.parse_args()
+
+def similarity(nlp,vocab,lemmatizer,matchdata,sentence):
+  global _interrupted
+  if _interrupted or sentence == "q":
+    _interrupted = True
+    return
+  tokens = nlp(' '.join([lemmatizer.lemmatize(word) for word in sentence.lower().split(" ")]))
+  print(tokens)
+  vlength = len(vocab)
+  for i in range(len(tokens)):
+    # dump(tokens[i])
+    lemtext = tokens[i].text
+    isCached = (lemtext in matchdata)
+    if isCached:
+      sortedmatches = matchdata[lemtext]
+    else:
+      matches = {}
+      for n,word in enumerate(vocab):
+        # if n > 100000: break
+        print("\rProcessing entry {}/{} for {}".format(n,vlength,lemtext),end="")
+        sim  = word.similarity(tokens[i])
+        if sim > CUTOFF_SIM:
+          matches[word.text] = sim
+      print("\n"+lemtext)
+      sortedmatches = []
+      usedkeys = set()
+      for k in sorted(matches, key=matches.get, reverse = True):
+        lemkey = lemmatizer.lemmatize(k.lower())
+        if lemkey in usedkeys:
+          continue
+        usedkeys.add(lemkey)
+        sortedmatches.append([float(matches[k]), lemkey])
+        if len(sortedmatches) == MATCHES:
+          break
+    if not args.automate:
+      for entry in sortedmatches:
+        print("  {:0.5f}: {}".format(entry[0], entry[1]))
+    if not isCached:
+      matchdata[lemtext] = sortedmatches
+
+def sigint_handler(signum, frame):
+  global _interrupted
+  _interrupted = True
+  print("\nPress enter to save and exit")
+
+def main():
+  global _interrupted, args
+  _interrupted = False
+
+  args = initParser()
+  signal.signal(signal.SIGINT, sigint_handler)
+
+  nlp        = spacy.load('en_core_web_lg')  # make sure to use larger model!
+  vocab      = [word for word in nlp.vocab if word.prob >= -17]
+  lemmatizer = nltk.WordNetLemmatizer()
+  lemmatizer.lemmatize("having")
+  if os.path.exists(args.outfile):
+    print("Loading data from file")
+    matchdata = compressedJsonRead(args.outfile)
+    print("Loaded {} entries".format(len(matchdata.keys())))
+  else:
+    matchdata = {}
+  if args.automate: #Auto
+    for word in vocab:
+      similarity(nlp,vocab,lemmatizer,matchdata,word.text)
+  else: #Human
+    while not _interrupted:
+      similarity(nlp,vocab,lemmatizer,matchdata,input("Words (q to quit): "))
+  print("Saving data to file")
+  compressedJsonWrite(matchdata,args.outfile)
+
+if __name__ == "__main__":
+  main()

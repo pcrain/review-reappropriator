@@ -1,0 +1,206 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+
+import json, gzip, csv, re, hashlib, os, signal, time
+# from jsonstreamer import ObjectStreamer
+from jsonstreamer import JSONStreamer
+
+DPRINT          = True
+
+_interrupted = False
+
+class JStream:
+
+    def __init__(self):
+      self._json_streamer = JSONStreamer() #same for JSONStreamer
+      self._json_streamer.auto_listen(self)
+
+      self.inreviews            = False
+      self.current_review       = None
+      self.substructures        = []
+      self.keys                 = []
+      self.current_substructure = None
+      self.level                = 0
+
+      self.reviewBuffer = []
+
+    def _on_doc_start(self):
+      # print("Doc started")
+      pass
+
+    def _on_doc_end(self):
+      # print("Doc ended")
+      pass
+
+    def _on_object_start(self):
+      self.level += 1
+      # print("Object level {} started".format(self.level))
+      if self.inreviews:
+        if self.level == 3: #new review
+          self.current_review       = {}
+          self.substructures        = [self.current_review]
+        elif self.level > 3:
+          newObject = {}
+          if isinstance(self.current_substructure, dict):
+            self.current_substructure[self.keys.pop()] = newObject
+          elif isinstance(self.current_substructure, list):
+            self.current_substructure.append(newObject)
+          self.substructures.append(newObject)
+
+        self.current_substructure = self.substructures[-1]
+
+    def _on_object_end(self):
+      # print("Object level {} ended".format(self.level))
+      if self.inreviews:
+        if self.level == 3: #completed review
+          self.reviewBuffer.append(self.current_review)
+        elif self.level > 3:
+          self.substructures.pop()
+          self.current_substructure = self.substructures[-1]
+      self.level -= 1
+
+    def _on_array_start(self):
+      self.level += 1
+      # print("Array level {} started".format(self.level))
+      if self.inreviews and self.level > 3:
+        newArray = []
+        if isinstance(self.current_substructure, dict):
+          self.current_substructure[self.keys.pop()] = newArray
+        elif isinstance(self.current_substructure, list):
+          self.current_substructure.append(newArray)
+        self.substructures.append(newArray)
+        self.current_substructure = self.substructures[-1]
+
+    def _on_array_end(self):
+      # print("Array level {} ended".format(self.level))
+      self.level -= 1
+      if self.inreviews and self.level >= 3:
+        self.substructures.pop()
+        self.current_substructure = self.substructures[-1]
+
+    def _on_key(self,key):
+      # print('Key: {}'.format(key))
+      if key == "reviews" and self.level == 1:
+        self.inreviews = True
+      elif self.inreviews:
+        self.keys.append(key)
+      # time.sleep(1)
+
+    def _on_value(self,value):
+      # print('Value: {}'.format(value))
+      if isinstance(self.current_substructure, dict):
+        self.current_substructure[self.keys.pop()] = value
+      elif isinstance(self.current_substructure, list):
+        self.current_substructure.append(value)
+
+    def _on_element(self,element):
+      # print('Element: {}'.format(element))
+      if isinstance(self.current_substructure, dict):
+        self.current_substructure[self.keys.pop()] = element
+      elif isinstance(self.current_substructure, list):
+        self.current_substructure.append(element)
+
+    def parse(self, data):
+      self.reviewBuffer = []
+      self._json_streamer.consume(data)
+      for review in self.reviewBuffer:
+        yield review
+
+#Debug printing
+def dprint(*args, **kwargs):
+  if DPRINT: print(*args, **kwargs)
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('infile',  metavar='infile',  type=str,     help='input raw review file name')
+  parser.add_argument('outfile', metavar='outfile', type=str,     help='output filtered review file name')
+  parser.add_argument("-k", "--kgram", type=str, metavar="K",     help="kskip length", required=True)
+  parser.add_argument("-n", "--ngram", type=str, metavar="N",     help="ngram length", required=True)
+  parser.add_argument("-t", "--thres", type=str, metavar="thres", help="threshold for minimum occurrence count", required=True)
+  return parser.parse_args()
+
+class ReviewNgramCreator():
+  def __init__(self,infile,outfile,n,k,thres):
+    self.json      = None
+    self.ngrams    = SortedList()
+    self.ncounts   = SortedList()
+    self.infile    = infile
+    self.outfile   = outfile
+    self.inhandle  = None
+    self.stream    = None
+    self.n         = int(n)
+    self.k         = int(k)
+    self.thres     = int(thres)
+
+  # def load(self):
+  #   if os.path.exists(self.infile):
+  #     self.json = compressedJsonRead(self.infile)
+  #   elif os.path.exists(self.infile[:-3]):
+  #     self.json = compressedJsonRead(self.infile[:-3])
+  #   else:
+  #     warnp("Could not load {}: file does not exist".format(self.infile))
+
+  def streamReviews(self):
+    self.inhandle = gzip.open(self.infile, 'rt', encoding='utf-8')
+    self.stream   = JStream()
+    while True:
+      buf = self.inhandle.read(1024)
+      if _interrupted or (buf == ''):
+        break
+      for review in self.stream.parse(buf):
+        yield review
+    self.inhandle.close()
+    yield None
+
+  def computeNgrams(self):
+    kstring = "k{}n{}t{}".format(self.k,self.n,self.thres)
+    for countmode in [True,False]:
+      print ("\n{} [{}]".format("count phase" if countmode else "map phase",kstring))
+      for rnum,review in enumerate(self.streamReviews()):
+        if review is None:
+          break
+        print("\rParsing review #{}".format(rnum),end="")
+        units = getIdeaUnits(review)
+        for unit in units:
+          validtokens = getValidTokens(unit)
+          for g in skipgrams(validtokens,self.n,self.k):
+            ngram = ' '.join([x[1] for x in g])
+            nspan = [rnum,g[0][2],g[-1][2]+len(g[-1][0])]
+            # print("{}: {}".format(ngram,nspan))
+            cpoint = self.ncounts.bisect_left([ngram,0])
+            notfound = (cpoint == len(self.ncounts) or self.ncounts[cpoint][0] != ngram)
+            if countmode:
+              if notfound:
+                self.ncounts.add([ngram,1])
+              else:
+                self.ncounts[cpoint][1] += 1
+            elif (not notfound) and (self.ncounts[cpoint][1] >= self.thres): #Keep only entries with a minimum number of occurrences
+              ipoint = self.ngrams.bisect_left([ngram,[DEFAULTTUPLE]])
+              if ipoint == len(self.ngrams) or self.ngrams[ipoint][0] != ngram:
+                self.ngrams.add([ngram,[nspan]])
+              else:
+                self.ngrams[ipoint][1].append(nspan)
+
+  def saveAndClose(self):
+    print("Saving")
+    self.ngrams = [item for item in self.ngrams]
+    # jsonWrite(self.ngrams,self.outfile[:-3],indent=1)
+    compressedJsonWrite(self.ngrams,self.outfile)
+    self.inhandle.close()
+
+#Signal handling
+def sigint_handler(signum, frame):
+  global _interrupted, rnc
+  _interrupted = True
+
+def main():
+  global rnc
+  args = initParser()
+  signal.signal(signal.SIGINT, sigint_handler)
+  rnc = ReviewNgramCreator(args.infile,args.outfile,args.ngram,args.kgram,args.thres)
+  rnc.computeNgrams()
+  rnc.saveAndClose()
+
+if __name__ == "__main__":
+  main()

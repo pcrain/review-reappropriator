@@ -1,0 +1,107 @@
+#!/usr/bin/python
+
+# Installation of model:
+  # pip install --user https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.0.0/en_core_web_sm-2.0.0.tar.gz
+
+from common import * #Import common stuff
+
+DPRINT          = True
+THREADED        = False
+TOKEN_STRUCTURE = "text,lemma,offset,dependency,PoS,headoffset"
+
+import json, spacy, gzip, csv, re, hashlib, os, signal
+from concurrent.futures import ThreadPoolExecutor
+
+_interrupted = False
+
+#Debug printing
+def dprint(*args, **kwargs):
+  if DPRINT: print(*args, **kwargs)
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('infile',  metavar='infile',  type=str, help='input raw review file name')
+  parser.add_argument('outfile', metavar='outfile', type=str, help='output filtered review file name')
+  return parser.parse_args()
+
+class ReviewPreprocessor():
+  def __init__(self):
+    self.nlp       = spacy.load('en_core_web_sm')
+    self.reviewmap = []
+    self.knownmd5s = {}
+
+  def loadExistingData(self,infile):
+    if os.path.exists(infile):
+      jdata = compressedJsonRead(infile)
+      for row in jdata["reviews"]:
+        self.knownmd5s[row["_md5"]] = row
+      print("Loaded {} sentences".format(len(self.knownmd5s.keys())))
+
+  def parseDependencies(self,infile):
+    self.reviews   = loadCsvAsDict(infile)
+    self.nreviews  = len(self.reviews)
+    self.reviewmap = [{} for _ in range(self.nreviews)]
+    if THREADED:
+      with ThreadPoolExecutor(max_workers=3) as executor:
+        for i in range(self.nreviews):
+          executor.submit(self.parseReviewStructure,i)
+    else:
+       for i in range(self.nreviews):
+        if _interrupted:
+          break
+        self.parseReviewStructure(i)
+    if _interrupted:
+      #Dict version
+      stoppingpoint = next(i for i,k in enumerate(self.reviewmap) if len(k.keys()) == 0)
+      #String version
+      # stoppingpoint = next(i for i,k in enumerate(self.reviewmap) if len(k) == 0)
+      print("Stopped at {}".format(stoppingpoint))
+      self.reviewmap = self.reviewmap[:stoppingpoint]
+
+  def parseReviewStructure(self,ind):
+    global _interrupted
+    if _interrupted:
+      return
+    review   = self.reviews[ind]
+    sentence = review["text"]
+    md       = md5(sentence)
+    if md in self.knownmd5s:
+      self.reviewmap[ind] = self.knownmd5s[md]
+      return self.reviewmap[ind]
+    print("\rProcessing review #{}".format(ind),end="")
+    structure         = review#.copy()
+    structure["_md5"] = md
+    structure.update(nlpPreprocess(self.nlp,sentence))
+
+    # self.reviewmap[ind] = json.dumps(structure)
+    self.reviewmap[ind] = structure
+    # print(self.reviewmap[ind])
+    return self.reviewmap[ind]
+
+#Signal handling
+def sigint_handler(signum, frame):
+  global _interrupted
+  _interrupted = True
+
+def main():
+  args = initParser()
+  signal.signal(signal.SIGINT, sigint_handler)
+  dp = ReviewPreprocessor()
+  if os.path.exists(args.outfile):
+    dp.loadExistingData(args.outfile)
+  elif os.path.exists(args.outfile[:-3]):
+    dp.loadExistingData(args.outfile[:-3])
+  dp.parseDependencies(args.infile)
+  print("Writing compressed JSON")
+  outjson = {
+    "token-structure" : TOKEN_STRUCTURE,
+    "reviews" : dp.reviewmap,
+  }
+  compressedJsonWrite(outjson,args.outfile)
+  # innards = '"token-structure":"{}","reviews":[{}]'.format(TOKEN_STRUCTURE,",".join(dp.reviewmap))
+  # compressedWrite("{"+innards+"}",args.outfile)
+  # print("Writing regular JSON")
+  # jsonWrite(outjson,args.outfile[:-3],indent=1)
+
+if __name__ == "__main__":
+  main()

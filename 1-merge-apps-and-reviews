@@ -1,0 +1,34 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('reviewfile',  metavar='reviewfile', type=str, help='input review file name')
+  parser.add_argument('appfile',     metavar='appfile',    type=str, help='input app file name')
+  parser.add_argument('outfile',     metavar='outfile',    type=str, help='output merged file name')
+  return parser.parse_args()
+
+def mergeAppAndReview(app,rev):
+  #Make a copy of the original review
+  newentry = rev.copy()
+  #Break apart the score for the review and the score for the app
+  newentry["revscore"] = newentry["score"]
+  newentry["appscore"] = app["score"]
+  #Add app info to the new entry
+  newentry["category"] = app["category"]
+  newentry["title"]    = app["title"]
+  newentry["summary"]  = app["summary"]
+  #Return the new entry
+  return newentry
+
+def main():
+  args       = initParser()
+  allreviews = loadCsvAsDict(args.reviewfile)
+  allapps    = loadCsvAsDict(args.appfile,ikey="appId")
+  merged     = [mergeAppAndReview(allapps[rev["appId"]],rev) for rev in allreviews]
+  fields     = ["appId","category","title","summary","appscore","revscore","text"]
+  writeDictToCsv(args.outfile,fields,merged)
+
+if __name__ == "__main__":
+  main()

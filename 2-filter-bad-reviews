@@ -1,0 +1,65 @@
+#!/usr/bin/python
+
+from common import * #Import common stuff
+
+MIN_REVIEW_WORDS = 10  #Minimum number of words in a review to pass the filter
+FREQ_CUTOFF      = 50  #Minimum frequency of a word to count as a valid word
+GOOD_WORD_CUTOFF = 0.8 #Minimum frequency of good words to all tokens to count as a passable review
+
+# PUNC_STRIPPER    =  re.compile(r"""""")
+
+def initParser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('infile',              metavar='infile',     type=str, help='input raw review file name')
+  parser.add_argument('outfile',             metavar='outfile',    type=str, help='output filtered review file name')
+  parser.add_argument("-f", "--frequencies", metavar="freqfile",   type=str, help="file listing word/frequency pairs", required=True)
+  return parser.parse_args()
+
+def main():
+  args       = initParser()
+
+  #Load word frequencies
+  with open(args.frequencies, 'r') as ffile:
+    wordfreqs = { x : int(y) for x,y in [tuple(line.split()) for line in ffile.readlines()] }
+  #Add additional word frequencies for single letters
+  for letter in 'abcdefghijklmnopqrstuvwxyz':
+    wordfreqs[letter] = 10000
+
+  #Load reviews
+  allreviews = loadCsvAsDict(args.infile)
+
+  #Set up puncutation stripper
+  translator = str.maketrans('', '', """!"#$%&()*+,./:;<=>?@[\\]^_`{|}~""") #Allow apostrophes and hyphens
+
+  goodreviews = []
+  for rev in allreviews:
+    #Get the review text and transform it to lowercase, and remove punctuation
+    rtext = rev["text"].lower().translate(translator)
+    #Get individual words
+    words = rtext.split()
+    if len(words) < MIN_REVIEW_WORDS:
+      continue #Review is too short
+    nwords = len(words)
+    ngoodwords = 0
+    # colorstring = ""
+    for word in words:
+      if word not in wordfreqs:
+        # colorstring += "{}{}{} ".format(col.RED,word,col.BLN)
+        continue #Not a recognized English word
+      if wordfreqs[word] < FREQ_CUTOFF:
+        # colorstring += "{}{}{} ".format(col.YLW,word,col.BLN)
+        continue #Not a common enough English word
+      # colorstring += "{}{}{} ".format(col.GRN,word,col.BLN)
+      ngoodwords += 1
+    if ngoodwords < MIN_REVIEW_WORDS:
+      continue #Not enough words after processing
+    eng_word_freq = (float(ngoodwords) / nwords)
+    if eng_word_freq < GOOD_WORD_CUTOFF:
+      # if eng_word_freq > 0.5:
+      #   print("{}/{}: {}".format(ngoodwords,nwords,colorstring))
+      continue #Too many non-English words
+    goodreviews.append(rev)
+  writeDictToCsv(args.outfile,goodreviews[0].keys(),goodreviews)
+
+if __name__ == "__main__":
+  main()
