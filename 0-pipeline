@@ -1,9 +1,9 @@
 #!/bin/bash
 
-        word_frequencies="./data/enwiki-20150602-words-frequency.txt"
            base_app_file="./data/apps-static.tsv"
         base_review_file="./data/reviews-static.tsv"
       merged_review_file="./data/reviews-merged.tsv"
+        word_frequencies="./data/enwiki-20150602-words-frequency.txt"
     filtered_review_file="./data/reviews-filtered.tsv"
 preprocessed_review_file="./data/reviews-preprocessed.json.gz"
     kngram_review_file_2="./data/reviews-k3n2grams.json.gz"
