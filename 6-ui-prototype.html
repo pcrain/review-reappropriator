@@ -1,14 +1,9 @@
-<!-- update your app's youtube video. -->
-
-<!--
-  TODO:
-    - Second occurrence of phrases is often not highlighted; should deduplicate phrases when highlighting
- -->
-
 <html>
     <head>
       <script src="jquery-3.1.1.min.js"></script>
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+      <link href='https://fonts.googleapis.com/css?family=Trocchi' rel='stylesheet'>
+      <link href="https://fonts.googleapis.com/css?family=Rubik" rel="stylesheet">
       <style type="text/css">
         label#reslabel {
           /*color: darkblue;*/
@@ -53,25 +48,137 @@
           /*font-weight: bold;*/
           cursor: help;
         }
+
+        div#reusableLayout {
+          display: grid;
+          grid-template-columns: 70% 30%;
+          grid-template-areas:
+            'mainheader  mainheader'
+            'fbheader    topicheader'
+            'fbentry     suggestbox'
+            'yourheader  yourheader'
+            'yourfb      yourfb'
+            'otherheader otherheader'
+            'otherfb     otherfb'
+            ;
+        }
+        div#mainHeader {
+          grid-area: mainheader;
+          text-align: center;
+          font-size: 36px;
+          margin: 0 0 32px 0;
+          /*border-bottom: 1px solid rgba(0,0,0,0.25);*/
+          border-radius: 16px;
+          /*color: white;*/
+          filter: drop-shadow(0 4px 4px rgba(192,192,192,0.5));
+          font-family: 'Rubik';
+        }
+        div#yourHeader,
+        div#otherHeader,
+        div#suggestHeader,
+        div#fbHeader {
+          border-bottom: 1px solid rgba(0,0,0,0.25);
+          border-radius: 8px;
+          padding: 0 0 10px 0;
+          text-align: center;
+          font-family: 'Rubik';
+        }
+        div#yourHeader {
+          grid-area: yourheader;
+          margin: 0 0 12px 0;
+        }
+        div#otherHeader {
+          grid-area: otherheader;
+          margin: 0 0 12px 0;
+        }
+        div#fbHeader {
+          grid-area: fbheader;
+          margin: 0 24px 12px 24px;
+        }
+        div#suggestHeader {
+          grid-area: topicheader;
+          margin: 0 0 12px 0;
+        }
+        div#textArea {
+          grid-area: fbentry;
+        }
+        div#suggestBox {
+          grid-area: suggestbox;
+          text-align: center;
+        }
+        blockquote#yourfbArea {
+          grid-area: yourfb;
+          background-color: rgba(128,128,192,0.15);
+          padding: 16px;
+          border-radius: 16px;
+        }
+        div#resultArea {
+          grid-area: otherfb;
+        }
+        div#bodyWrapper {
+          margin: 24px 10% 0 10%;
+        }
+        div#textArea textarea {
+          width: calc(100% - 48px);
+          margin: 0 24px;
+        }
+
+        blockquote {
+          background: #f9f9f9;
+          border-left: 10px solid #ccc;
+          margin: 1.5em 10px;
+          padding: 0.5em 10px;
+          quotes: "\201C""\201D""\2018""\2019";
+        }
+        blockquote:before {
+          color: #ccc;
+          content: open-quote;
+          font-size: 4em;
+          line-height: 0.1em;
+          margin-right: 0.25em;
+          vertical-align: -0.4em;
+        }
+        blockquote p {
+          display: inline;
+        }
       </style>
     </head>
     <body>
-      <form id="feedback-search-form">
-        Start Entering Feedback:
-        <table>
-          <tr><td rowspan="6">
-            <textarea rows="8" cols="80" autofocus id="searchterms" type="text" name="searchterms"></textarea><br>
-          </td><td><b>Topic Suggestions</b>:</td></tr>
-          <tr><td class="centered" id="suggestion1">___</td></tr>
-          <tr><td class="centered" id="suggestion2">___</td></tr>
-          <tr><td class="centered" id="suggestion3">___</td></tr>
-          <tr><td class="centered" id="suggestion4">___</td></tr>
-          <tr><td class="centered" id="suggestion5">___</td></tr>
-        </table>
-        <input id="searchterms-button" type="button" value="search">
-        <!-- <input id="images-button" type="button" value="images"> -->
-      </form>
+      <div id='bodyWrapper'>
+        <form id="feedback-search-form">
+          <div id='reusableLayout'>
+            <div id="mainHeader">
+              Feedback Reappropriation Demo
+            </div>
+            <div id="fbHeader">
+              <b>Enter Some Feedback</b>
+            </div>
+            <div id='textArea'>
+              <textarea placeholder="Write some feedback, and press enter to find similar feedback" rows="8" autofocus id="searchterms" type="text" name="searchterms"></textarea>
+            </div>
+            <div id='suggestHeader'><b>Topic Suggestions</b></div>
+            <div id='suggestBox'>
+              <div class="centered" id="suggestion1">___</div>
+              <div class="centered" id="suggestion2">___</div>
+              <div class="centered" id="suggestion3">___</div>
+              <div class="centered" id="suggestion4">___</div>
+              <div class="centered" id="suggestion5">___</div>
+            </div>
+          </table>
+          <input id="searchterms-button" type="hidden" value="search">
+          <!-- <input id="images-button" type="button" value="images"> -->
+        </form>
+      </div>
       <!-- <label id="reslabel">Query:</label> -->
+      <div id="yourHeader">
+        <b>Your Feedback</b>
+      </div>
+      <blockquote id="yourfbArea">
+          <span class='nohl'>Write some feedback above to get started!</span>
+      </blockquote>
+      <div id="otherHeader">
+        <b>Relevant Feedback</b>
+      </div>
       <div id="resultArea">
       </div>
     </body>
@@ -137,7 +244,7 @@
       callback(xhttp.responseText);
     };
     xhttp.onerror = function() {
-      alert(xhttp.status);
+      alert("Feedback server could not be reached\n\nStatus: "+xhttp.status);
     };
     xhttp.open('POST', w, true);
     // xhttp.setRequestHeader('Content-Type', 'application/json');
@@ -232,7 +339,7 @@
       // alert(result);
       var retdata = JSON.parse(JSON.parse(result));
       if (retdata["matches"].length == 0) {
-        alert("Nothing found. :(");
+        alert("Nothing found. Try entering more feedback.");
         return
       }
       // alert(retdata);
@@ -241,7 +348,8 @@
 
       var rstring      = '<table>';
       var tcell        = '<tr id="resrow{2}"><td>{1}</td><td style="display: block; word-wrap:break-word;">{0}</td></tr>';
-      var updownvote   = '<i id="uvote{0}" onclick="upvote({0})" class="fa fa-thumbs-up"></i><i id="dvote{0}" onclick="downvote({0})" class="fa fa-thumbs-down"></i>';
+      // var updownvote   = '<i id="uvote{0}" onclick="upvote({0})" class="fa fa-thumbs-up"></i><i id="dvote{0}" onclick="downvote({0})" class="fa fa-thumbs-down"></i>';
+      var updownvote   = '';
 
       var highlights = getHighlights(retdata);
       // alert(JSON.stringify(highlights))
@@ -270,17 +378,21 @@
               );
           }
         }
-        rstring +=  tcell.formatUnicorn(
-          markup,
-          (i == -1) ? "" : updownvote.formatUnicorn(i+1),
-          i+1
-          );
-        rstring +=  '<tr><td colspan="2"><hr/></td></tr>';
+        if (i == -1) {
+          document.getElementById('yourfbArea').innerHTML = markup;
+        } else {
+          rstring += tcell.formatUnicorn(
+            markup,
+            (i == -1) ? "" : updownvote.formatUnicorn(i+1),
+            i+1
+            );
+          rstring += '<tr><td colspan="2"><hr/></td></tr>';
+        }
       }
       rstring += "</table>";
       document.getElementById('resultArea').innerHTML = rstring;
       for (var i = 0; i < retdata["suggestions"].length; ++i) {
-        $('td#suggestion'+(i+1)).html(retdata["suggestions"][i][0]);
+        $('#suggestion'+(i+1)).html(retdata["suggestions"][i][0]);
       }
     }, function(errorMessage) {
       document.getElementById('resultArea').innerHTML = 'Cannot display feedback: ' + errorMessage
@@ -339,8 +451,7 @@
   document.addEventListener('DOMContentLoaded', function() {
     document.getElementById("searchterms-button").addEventListener("click", searchForFeedback);
     var st = document.getElementById("searchterms");
-    // st.value = "update the app with a video now";
-    st.value = "update your app's youtube video.";
+    // st.value = "update your app's youtube video.";
     st.addEventListener("keydown", entersearch);
     genColorSheet();
   });
